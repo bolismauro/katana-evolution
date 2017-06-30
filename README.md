@@ -54,11 +54,23 @@ public protocol CommandInterpreter {
 /**
   An hypotetical module that offers login/logout functionalities.
   
-  One thing to notice is the decoupling from the intents (message and command) from the actual implementation (commandInterpreter, the update will be described later on in the document). This decoupling has the major benefit of allowing to easily break circular depdendencies. For simplicity reasons, in fact, in this example message, command and command interpreter are under the umbrella of an "authentication module". We could easily create two separate modules though. One that exposes what the module can do (message and commands) and one that contains how these things are implemented (interpreter). Most likely it is the interpreter that will need to reference other modules and not the public interface. Since other modules will just import the public interface instead, we don't have a cycle anymore. 
+  One thing to notice is the decoupling from the intents (message and command)
+  from the actual implementation (commandInterpreter, the update will be
+  described later on in the document). This decoupling has the major benefit
+  of allowing to easily break circular depdendencies. For simplicity reasons,
+  in fact, in this example message, command and command interpreter are under
+  the umbrella of an "authentication module". We could easily create two separate
+  modules though. One that exposes what the module can do (message and commands)
+  and one that contains how these things are implemented (interpreter).
+  Most likely it is the interpreter that will need to reference other modules
+  and not the public interface. Since other modules will just import the public
+  interface instead, we don't have a cycle anymore. 
   
-  The only module that will import the interpeter is the app (main target) that will pass all the interpreters to the Katana framework.
+  The only module that will import the interpeter is the app (main target)
+  that will pass all the interpreters to the Katana framework.
   
-  This decoupling will also help a lot in writing tests for our logic. We will talk about this later on.
+  This decoupling will also help a lot in writing tests for our logic.
+  We will talk about this later on.
 */
 
 public enum AuthenticationMessage: Message {
