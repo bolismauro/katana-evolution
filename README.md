@@ -135,16 +135,121 @@ func update(model: AppModel, message: Message) -> (AppModel, [Command]) {
 }
 ```
 
+There is a big difference with respect to the ELM approach. A command, in fact, receives a message that is automatically sent when the command implementation finishes with the result of the execution. So, how things like HTTP progress are handled? You have to create a subscription to a thing called `HTTP.Progress` and handle it from there. Basically a command can do stuff and at the end it sends a message. In the approach just shown, we allow a command implementation to dispatch multiple messages. I've decided to go for this approach because:
+
+* I don't see major drawbacks in doing that, altough I guess that ELM has his own good reasons to do so
+* I haven't properly figured out yet how subscriptions work and how integrate them in this approach, so I decided to currently don't rely on them. This thing should change before we implement this approach of course
 
 
-* How to handle update composition
+
+
+#### Composing Updaters
+
+As we saw before, the state of the application can only be updated using a pure function called `update` that has the following signature:
+
+```swift
+func update(model: Model, message: Message) -> (Model, [Command])
+```
+
+Applications can be very large and manage everything inside a function can't be a real solution. The key idea here is to compose function to have the final updater that is used by the application.
+
+First of all, we create encapsulate the update requirement in a protocol
+
+```swift
+protocol Model {}
+protocol Message {}
+protocol Command {}
+
+protocol AnyUpdater {
+  func update(model: Model, message: Message) -> (Model, [Command])
+}
+
+protocol Updater: AnyUpdater {
+  associatedtype TypedModel: Model
+  
+  func update(model: TypedModel, message: Message) -> (Model, [Command])
+}
+```
+
+Here we have to make a design choice: either we use functions to implement the update logic, or we encapsulate this logic in structs. We choose to use a Protocol and to ask developers to implement the update logic using structs (or classes, altough I don't see any reason why you should use it). There are pros/cons in each approach but the main reason why I've decided for the protocol path is because I have the feeling (justified by months in debugging Katana) that have to deal with structs is easier than functions when it comes to debug things. 
+
+Ok, now that we have created the basic types, we can build on top of them some convenience updaters, like the typed updater:
+
+```swift
+protocol TypedUpdater: Updater {
+  associatedtype TypedMessage: Message
+  
+  func update(model: inout TypedModel, message: TypedMessage) -> (Model, [Command])
+}
+
+// implementation of update(model:message:) here, it will invoke the typed update method
+```
+
+Here we have an updater that can be really handy to use when you know the message type you will manage and the model type. The inputs are already typed and the model is inout. 
+
+Another handy updater is the `CombinedUpdater` . The idea is that the model is divided in slices (e.g., the authentication part, the part that holds the information about the environment in which the application is running, the part related to the ui and so on). Each module of the application is in charge of managing a specific part of the application (it is basically in charge for a slice). The `CombinedUpdater` is an handy way to combine multiple updaters that work on different part of the model (or on the same part but with different responsabilities). Most likely this updater is used at the very root of the application, but it could be also useful in other parts:
+
+```swift
+// just the usage here
+let appUpdater = CombinedUpdater<AppModel>([
+  .full(AnUpdater()), // pass the full model to the updater
+  .slice(keypath: \.path.to.slice, SliceUpdater()) // pass just a slice
+])
+```
+
+You can find the implementation in the playground if you are interested into the implementation details.
+The point here is that you can easily combine updaters leveraging key paths (for Swift < 4 we can create a shim). Everything is type  checked so that the updater has the proper type as input and it is not possible to pass the wrong state type.
+
+The last handy updater is a way to create an updater starting from a closure, just in case you have an extremely simple case to manage (or a test):
+
+```swift
+let functionUpdater = FunctionUpdater<AppModel> { model, message in
+  return model
+}
+```
+
+Using this approach, we are able to create updater functions using the proper level of abstraction. If you want to create a very powerful upder, that manages different types of messages or models, you can use the `AnyUpdater` protocol. The more specific is your case, the most constrains the updater has, the less code you have to write. The idea is that you can handle 80% of your cases with very little code, leveraging the handy updaters and the type system. For the other 20%, you have to write a little more of code, but it is still possible to manage everything.
+
+
+In general this approach is extremely flexible, and developers can leverage the architecture to create the best APIs for their needs. For instance, if you don't have to deal with modularisation, you can even combine the `message` and the respective `updater`:
+
+```swift
+struct MessageUpdater<M, Mex: Message & Updater>: TypedUpdater where Mex.TypedModel == M {
+  typealias TypedMessage = Mex
+  typealias TypedModel = M
+
+  func update(model: inout M, message: Mex) {
+    model = message.update(model: model, message: message)
+  }
+}
+
+// and you can create a message like this
+
+enum AMessage: Message, TypedUpdater {
+  typealias TypedMessage = AMessage
+  typealias TypedModel = AppModel
+  
+  case increase, decrease
+  
+  func update(model: inout AppModel, message: AMessage) {
+    switch message {
+    case .increase:
+      model.a += 1
+      
+    case .decrease:
+      model.a -= 1
+    }
+  }
+}
+```
+
+
+
+
+
+
 * How to create reusable commands
 * Subscriptions
-
-#### Pure Update Function
-
-#### Commands
-#### Subscriptions
 
 ## Architecture Testability
 
