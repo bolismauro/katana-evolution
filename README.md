@@ -1,12 +1,12 @@
 # Katana Logic Evolution (or, ELM-inspired business logic management)
 
-The goal of this evolution is to try to correct all the problems we have found using Katana for several months in production now. During these months we also have increased our knowledge and understanding of this pattern. Some choices we have made at the very begin of the Katana implementations are showing their limits. Moving from MVC to Katana has been a good move in terms, but the feeling is that we can do much better when it comes to manage the logic our applications. 
+The goal of this evolution is to try to correct all the problems we have found using Katana for several months in production now. During these months we also have increased our knowledge and understanding of this pattern. Some choices we have made at the very begin of the Katana implementation are showing their limits. Moving from MVC to Katana has been a good move in terms, but the feeling is that we can do much better when it comes to manage the logic our applications. 
 
 The main idea is to take deep inspiration from ELM. Previously we only considered redux (and react for the UI) as a source of inspiration.
 
 ## Goals
 
-Here are the major pain points I felt about Katana (again, logic-wise) and therefore the goals I'd like to achieve with this proposa (in no particular order)l:
+Here are the major pain points I felt about Katana (again, logic-wise) and therefore the goals I'd like to achieve with this proposa (in no particular order):
 * Having a single "reducer" (update state) instead of leveraging composition to update the state heavility limits the possibility of composing how the application state is updated. In particular it is hard to decouple behaviours in different parts (e.g., a single file where all the authentication logic si defined) since there isn't a way to actually write separated pieces of updating logic when an action is dispatched. The same goes for the "side effects" that an action carries
 * We have split our applications in separated frameworks to leverage WMO and reduce the compilation time of our builds when we develop. Splitting the code has been a nightmare because of reference cycles. There are various causes (e.g., the project didn't start with modularization in mind) but one of the primary reasons is that the current Katana really doesn't support modularization really well. As we defined in the previous point, it is impossible to split side effects and update logic when an action is triggered and it is also very hard to separate the public interface of a module (e.g., what functions it offers) from the actual implementation, since they are extremely tied together (that is, both of them are the actions). Moreover, there isn't really a way to compose the state update and this requires that all the actions know the state type. We partially solved this protocol by adopting protocols (e.g., "StateWithNavigation")
 * We heavily rely on actions that dispatch, in the side effect, other actions forming a chaining of actions. While this is not necessarily a bad thing per se, it quickly becomes really hard to debug issues leveraging Xcode. To put this in a simple way, it is impossible to understand who has dispatch an action because of internal implementation details (actions are dispatched using an OperationQueue). We have partially solved this issue by creating a monitor that shows all the actions that are dispatched and how the state changes after each reduction, but my feeling is that we should decrease this need of dispatching actions from other actions to some edge cases
@@ -210,6 +210,9 @@ Using this approach, we are able to create updater functions using the proper le
 In general this approach is extremely flexible, and developers can leverage the architecture to create the best APIs for their needs. For instance, if you don't have to deal with modularisation, you can even combine the `message` and the respective `updater`:
 
 ```swift
+// NB: commands are not handled for simplicity. The real world implementation will
+// have to take into account them
+
 struct MessageUpdater<M, Mex: Message & Updater>: TypedUpdater where Mex.TypedModel == M {
   typealias TypedMessage = Mex
   typealias TypedModel = M
@@ -460,7 +463,7 @@ In the example above, we always return the subscription, since we are always int
 ```swift
 enum TickSubscription: Subscription {
   // tick each X seconds invoking the message
-  case second(Int, Message)
+  case eachNumberOfSeconds(Int, Message)
   
   // equatable implementation here
 }
@@ -477,7 +480,7 @@ struct AnSubscriptionProvider {
     
     if model.counterActivated {
       // if the counter is active we send an increase counter message each second
-      return [ TickSubscription.eachSecond(1, AppMessage.increaseCounter) ]
+      return [ TickSubscription.eachNumberOfSeconds(1, AppMessage.increaseCounter) ]
       
     } else {
       // otherwise we don't do anything
@@ -489,17 +492,95 @@ struct AnSubscriptionProvider {
 
 
 
-
-#### Still To Be Discussed
-* Properly review everything and make sure commands are handled in the update section
-
 ## Architecture Testability
 
-TDB
+One of the major advantages of this architecture is the fact that everything is well separated and testable. Here is an overview of how things can be tested
+
+##### Updater
+
+Here we want to test whether the model is properly updated and if the commands that are returned are the ones we expect
+
+```swift
+let updater = AnUpdater()
+let message = AMessage.simpleMessage
+let model = AModel()
+
+let (newModel, commands) = updater.update(model: model, message: message)
+
+// test the new model is as simple as with the previous katana
+XCAssert(newModel.value, expectedValue)
+
+// but now also testing triggered commands (operations that must be performed) is easy
+// NB: assuming `ACommand` is equatable
+XCAssert(commands.first as? ACommand, Command.simpleOperation)
+```
+
+Again, we are testing 1) the model is correct and 2) the operations we are about to perform. Since the method is pure, and no real side effects are performed, we don't need to create weird mocks or setup a complex environment. Testing the application updated logic is way easier with respect to the previous approach.
+
+##### SubscriptionProvider
+
+The same reasoning we have made for the `Updater` is true also for the `Subscription Provider`. We can easily test that the subscriptions that are triggered (ketp, added/removed) are the ones we expect
+
+```swift
+let subscriptionProvider = SubscriptionProvider()
+let message = AMessage.simpleMessage
+let model = AModel()
+
+let subscriptions = subscriptionProvider.subscriptions(model: model, message: message)
+
+// Again, testing is straightforward
+// NB: assuming `ASubscription` is equatable
+XCAssert(subscriptions.first as? ASubscription, ASubscription.simpleSubscription)
+```
+
+
+
+##### Command and Subscription Interpeters
+
+You also want to test the real implementation of commands and subscription. Since they are now separated implementation, you can easily test them treating them as separated pieces of code, without mocking complex environments (the same approach can be applied also to commands interpreters):
+
+```swift
+enum TickSubscription: Subscription {
+  // tick each X seconds invoking the message
+  case eachNumberOfSeconds(Int, Message)
+  
+  // equatable implementation here
+}
+
+class TickSubscriptionInterpreter: SubscriptionInterpreter {
+  // implementation here, not really relevant
+} 
+
+enum TestMessage {
+  case testMessage
+}
+
+let subscription = TickSubscription.eachSecond(1, TestMessage.testMessage)
+
+var dispatchedMessages: [Message] = []
+
+let dispatch = { message in
+  dispatchedMessages.append(message)
+}
+
+let impl = TickSubscriptionInterpreter(subscription, dispatch)
+impl.start()
+// wait 10 seconds
+impl.stop
+
+XCAssert(dispatchedMessages.count, 10)
+
+for message in dispatchedMessages {
+  XCAssert(message as? TestMessage, TestMessage.testMessage)
+}
+```
+
+As you can see, this test is completely separated from the application itself. Consider also that the mocked dispatch can be also part of a utility library for testing application logics implemented in Katana. For more complicated things, we might need to mock things like `Notification` or external web sockets. But the main point here is that we don't have to deal with the whole application context to test a single part. 
+
+
 
 ## Open Points
 
 * How do we handle dependencies? For instance, in order to make an API call we use an instance of an APIManager. We currently use dependency injection to inject (testable) dependencies into the logic (side effects). How does it work with this new approach? Is it still the proper way to handle dependencies?
 
-* Do we have to provide a sort of algebra of commands?  (Task.sequence, Task.map, ....)
 
