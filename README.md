@@ -566,7 +566,7 @@ let dispatch = { message in
 let impl = TickSubscriptionInterpreter(subscription, dispatch)
 impl.start()
 // wait 10 seconds
-impl.stop
+impl.stop()
 
 XCAssert(dispatchedMessages.count, 10)
 
