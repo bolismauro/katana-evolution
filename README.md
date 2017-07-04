@@ -204,7 +204,7 @@ The last handy updater is a way to create an updater starting from a closure, ju
 
 ```swift
 let functionUpdater = FunctionUpdater<AppModel> { model, message in
-  return model
+  return (model, [])
 }
 ```
 
@@ -245,11 +245,72 @@ enum AMessage: Message, TypedUpdater {
 
 
 
+#### Reusable Commands
+
+When it comes to create libraries, you may need to have commands do things and then give you back a result. One of the most common examples here are API calls. Let's say you need to make a network POST call, in an imperative approach, you ideally would write something like this:
+
+```swift
+// somewhere in your code
+api.post(URL) { result in
+  // do magic stuff with your result
+}
+```
+
+We can have the same approach, and use imperative code in a command we have created and use the `api` class to perform the call and manage the result.
+
+Let's say we want to stick with a message-based approach though and have a generic library that manages API calls. The library will most likely expose some commands:
+
+```swift
+enum APICommand: Command {
+  case get(URL)
+  case post(URL)
+}
+```
+We return this command with the proper information in an update and we are done. Almost. We need to find a way to get the response back. Here is what we can do:
+
+```swift
+// Just an enum to wrap the result of the api call
+enum Result<Payload> {
+  case success(Payload)
+  case error(Error)
+}
+
+// Here is the updated commands
+enum APICommand<Payload>: Command {
+  case get(URL, (Result<Payload>) -> Message)
+  case post(URL, (Result<Payload>) -> Message)
+}
+```
+
+We are basically passing to the message a closure that takes a result and returns a message. The API library will perform the network call and leverage the closure to get a message. At this point it will send the new message. This message will contain the result of the network call, and we can implement our own logic in the `update` function (e.g., save the payload in the model, show an error in the UI and so on).
+
+Leveraging the Swift type system, we can send new API commands in a very elegan way:
+
+```swift
+// assume we have a Todo struct, and that the API library knows how to
+// create todo instances from a network response
+struct Todo { ... }
+
+enum AppMessage {
+  case manageGetTodo(Result<Todo>)
+}
+
+// in the update function we can write
+return (model, [APICommand<Todo>.get(url, AppMessage.manageGetTodo)])
+
+```
 
 
 
-* How to create reusable commands
+So basically the idea is that we can create libraries that expose commands that do something, and then return a result leveraging the message system. This allow to remove callbacks (or limit the usage of callbacks) without compromising the clarity and the verbosity of our system. Remember that the more the message system is used, the more we can leverage tooling (e.g., monitors) to track bugs and understand wrong behaviours in our applications.
+
+
+
+#### Still To Be Discussed
+
+
 * Subscriptions
+* Properly review everything and make sure commands are handled in the update section
 
 ## Architecture Testability
 

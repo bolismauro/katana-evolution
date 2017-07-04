@@ -2,6 +2,10 @@
 
 import UIKit
 
+/**
+ Note: commands logic has not been added for simplicity
+*/
+
 // MARK - helper protocols
 
 protocol Model {}
