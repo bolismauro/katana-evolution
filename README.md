@@ -508,11 +508,11 @@ let model = AModel()
 let (newModel, commands) = updater.update(model: model, message: message)
 
 // test the new model is as simple as with the previous katana
-XCAssert(newModel.value, expectedValue)
+XCAssertEqual(newModel.value, expectedValue)
 
 // but now also testing triggered commands (operations that must be performed) is easy
 // NB: assuming `ACommand` is equatable
-XCAssert(commands.first as? ACommand, Command.simpleOperation)
+XCAssertEqual(commands.first as? ACommand, Command.simpleOperation)
 ```
 
 Again, we are testing 1) the model is correct and 2) the operations we are about to perform. Since the method is pure, and no real side effects are performed, we don't need to create weird mocks or setup a complex environment. Testing the application updated logic is way easier with respect to the previous approach.
@@ -530,7 +530,7 @@ let subscriptions = subscriptionProvider.subscriptions(model: model, message: me
 
 // Again, testing is straightforward
 // NB: assuming `ASubscription` is equatable
-XCAssert(subscriptions.first as? ASubscription, ASubscription.simpleSubscription)
+XCAssertEqual(subscriptions.first as? ASubscription, ASubscription.simpleSubscription)
 ```
 
 
@@ -568,10 +568,10 @@ impl.start()
 // wait 10 seconds
 impl.stop()
 
-XCAssert(dispatchedMessages.count, 10)
+XCAssertEqual(dispatchedMessages.count, 10)
 
 for message in dispatchedMessages {
-  XCAssert(message as? TestMessage, TestMessage.testMessage)
+  XCAssertEqual(message as? TestMessage, TestMessage.testMessage)
 }
 ```
 
