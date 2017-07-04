@@ -135,11 +135,7 @@ func update(model: AppModel, message: Message) -> (AppModel, [Command]) {
 }
 ```
 
-There is a big difference with respect to the ELM approach. A command, in fact, receives a message that is automatically sent when the command implementation finishes with the result of the execution. So, how things like HTTP progress are handled? You have to create a subscription to a thing called `HTTP.Progress` and handle it from there. Basically a command can do stuff and at the end it sends a message. In the approach just shown, we allow a command implementation to dispatch multiple messages. I've decided to go for this approach because:
-
-* I don't see major drawbacks in doing that, altough I guess that ELM has his own good reasons to do so
-* I haven't properly figured out yet how subscriptions work and how integrate them in this approach, so I decided to currently don't rely on them. This thing should change before we implement this approach of course
-
+There is a big difference with respect to the ELM approach. A command, in fact, receives a message that is automatically sent when the command implementation finishes with the result of the execution. So, how things like HTTP progress are handled? You have to create a subscription to a thing called `HTTP.Progress` and handle it from there. Basically a command can do stuff and at the end it sends a message. In the approach just shown, we allow a command implementation to dispatch multiple messages. I've decided to go for this approach because I don't see major drawbacks in doing that, altough I guess that ELM has his own good reasons to do so.
 
 
 
@@ -306,10 +302,195 @@ So basically the idea is that we can create libraries that expose commands that 
 
 
 
+#### Subscriptions
+
+In most applications, we have to deal with external or periodic inputs: Some examples are:
+
+* Messages from a websocket
+* System events (app enters background, app rotated and many others)
+* A tick every X seconds
+* many many others
+
+
+
+We'd like to introduce a mechanism to gracefully handle all this events following the TEA architecture: **subscriptions**. Here is the idea: every time the model changes, a function is invoked. The function has the following signature:
+
+```swift
+func subscriptions(model: Model, message: Message) -> [Subscription]
+```
+
+It takes the current model, the message that has triggered the model change and returns an array of subscriptions. A subscription is like a command: an intent of having something. The function is pure and doesn't run any code per se. The subscriptions are collected and handled by the system.
+
+There is a slightly different with respect to the command though. Subscriptions are like daemons that run in background. They do something in an impure environment and trigger messages back in the system. Every time the subscriptions function is invoked, the system compares the current subscriptions with the previous ones and 1) removes the subscriptions that are not more required (that is, they are not returned in the function) and 2) adds new subscriptions.
+
+Here is an high level descriptions of the involved protocols:
+
+```swift
+// some protocols
+protocol Message {}
+protocol Command {}
+protocol Model {}
+
+typealias DispatchMessageFn = (Message) -> Void
+
+/**
+ The definition of a subscription. You can see this as the equivalent
+ of a Command.
+ 
+ The subscription must be Equatable because the system needs to compare
+ them
+*/
+protocol AnySubscription {}
+protocol Subscription: AnySubscription, Equatable {}
+
+/**
+ This is the protocol that should be implemented to provide
+ the logic that defines which subscriptions should be active in the
+ system. For simplicity we don't show more here, but you can apply all
+ the reasoning about composition we have defined for the `Updater` also in this
+ case
+ 
+ TODO: find a better name
+*/
+protocol AnySubscriptionProvider {
+  func subscriptions(model: Model, message: Message) -> [AnySubscription]
+}
+
+/**
+ This is the equivalent of the CommandInterpreter. Basically this
+ should provide the implementation for a specific subscription.
+ 
+ We require that the concrete implementation is done using a class
+ because the system keeps these intepreter alive and memory management
+ must be taken into account
+*/
+protocol SubscriptionInterpreter: class {
+  /// The managed subscription
+  associatedtype Sub: Subscription
+  
+  /// Init used by the system to pass the information
+  init(subscription: Sub, dispatch: @escaping DispatchMessageFn)
+  
+  /// This method is invoked when the susbscription starts
+  func start()
+  
+  /// This method is invoked when the susbscription ends  
+  func stop()
+}
+```
+
+
+
+Here is a simple example of notification that can be used to manage system `Notification`. The implementation is not meant to be production ready or even have the best approach. It is just a way to show how a subscription can be created and handled
+
+```swift
+/// Protocol that messages that handle the subscription response must
+/// implement
+protocol NotificationMessage: Message {
+  init(with notification: Notification)
+}
+
+/// The subscription definition
+enum NotificationSubscription: Subscription {
+
+  /// The app did enter in background
+  case appDidEnterBackground(NotificationMessage.Type)
+  
+  static func == (lhs: NotificationSubscription, rhs: NotificationSubscription) -> Bool {
+    switch (lhs, rhs) {
+    case let (.appDidEnterBackground(typeL), .appDidEnterBackground(typeR)):
+      return String(reflecting: typeL) == String(reflecting: typeR)
+      
+    default:
+      return false
+    }
+  }
+}
+
+class NotificationSubscriptionInterpreter: SubscriptionInterpreter {
+  typealias Sub = NotificationSubscription
+  
+  private let subscription: NotificationSubscription
+  private let dispatch: DispatchMessageFn
+  
+  required init(subscription: Sub, dispatch: @escaping DispatchMessageFn) {
+    self.subscription = subscription
+    self.dispatch = dispatch
+  }
+  
+  func start() {
+    
+    let center = NotificationCenter.default
+    
+    switch self.subscription {
+    case let .appDidEnterBackground(responseMessage):
+      center.addObserver(forName: .UIApplicationDidEnterBackground, object: nil, queue: nil) { notification in
+        let message = responseMessage.init(with: notification)
+        self.dispatch(message)
+      }
+    }
+  }
+  
+  func stop() {
+    NotificationCenter.default.removeObserver(self)
+  }
+}
+
+enum AppNotificationMessage: NotificationMessage {
+  case handleDidEnterBackground(Notification)
+  
+  init(with notification: Notification) {
+    self = .handleDidEnterBackground(notification)
+  }
+}
+
+struct AnSubscriptionProvider {
+  func subscriptions(model: Model, message: Message) -> [AnySubscription] {
+    return [
+      NotificationSubscription.appDidEnterBackground(AppNotificationMessage.self)
+    ]
+  }
+}
+```
+
+
+
+In the example above, we always return the subscription, since we are always interested in listening for that specific notification. As we said before, we can also conditionally return subscriptions. For instance:
+
+```swift
+enum TickSubscription: Subscription {
+  // tick each X seconds invoking the message
+  case second(Int, Message)
+  
+  // equatable implementation here
+}
+
+struct AppModel {
+  var counterActivated: Bool
+}
+
+struct AnSubscriptionProvider {
+  func subscriptions(model: Model, message: Message) -> [AnySubscription] {
+    guard let model = model as? AppModel else {
+      return []
+    }
+    
+    if model.counterActivated {
+      // if the counter is active we send an increase counter message each second
+      return [ TickSubscription.eachSecond(1, AppMessage.increaseCounter) ]
+      
+    } else {
+      // otherwise we don't do anything
+      return []
+    }
+  }
+}
+```
+
+
+
+
 #### Still To Be Discussed
-
-
-* Subscriptions
 * Properly review everything and make sure commands are handled in the update section
 
 ## Architecture Testability
